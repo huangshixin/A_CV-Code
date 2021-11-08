@@ -1,6 +1,5 @@
 一、什么是模型预热？
-模型预热是一种训练思想，在模型预训练阶段，使用较小的学习率训练一些epochs或者step，目的是为了训练出一个学习率，然后采用新的学习率进行训练。
-能提高模型的精度。
+模型预热是一种训练思想，在模型预训练阶段，使用较小的学习率训练一些epochs或者step，目的是为了训练出一个学习率，然后采用新的学习率进行训练。能提高模型的精度。
 
 二、为什么要使用warmup？
 刚开始训练的时候，模型的权重是随机初始化的，模型对数据的“理解程度”接近为0，如果刚开始采用较大的学习率，可能会带来模型的不稳定(震荡)，之后再使用预先设置的学习率进行训练，使得模型收敛速度变得更快，模型收敛效果更佳。最后，使用小学习率继续探索，如果步子太大，容易错过局部最优点。
@@ -36,6 +35,123 @@ for train_steps in range(max_steps):
     if (train_steps+1) % 100 == 0:
              print("train_steps:%.3f--warmup_steps:%.3f--learning_rate:%.3f" % (
                  train_steps+1,warmup_steps,learning_rate))
+
+
+
+#########################################################################################################################################################################
+# ->箭头表示函数输出返回值类型
+# LR_SCHEDULER_NAME有两种WarmupMultiSetpLR, WarmupCosineLR
+def build_lr_scheduler(cfg: CfgNode, optimizer: torch.optim.Optimizer) -> torch.optim.lr_scheduler._LRScheduler:
+    """
+    Build a LR scheduler from config.
+    """
+    name = cfg.SOLVER.LR_SCHEDULER_NAME
+    if name == "WarmupMultiStepLR":
+        return WarmupMultiStepLR(
+            optimizer,
+            cfg.SOLVER.STEPS,                         # tuple (300, 400)
+            cfg.SOLVER.GAMMA,                         #[0.1]
+            warmup_factor=cfg.SOLVER.WARMUP_FACTOR,   # 0.001
+            warmup_iters=cfg.SOLVER.WARMUP_ITERS,     # 1000
+            warmup_method=cfg.SOLVER.WARMUP_METHOD,   # 'linear'
+        )
+    elif name == "WarmupCosineLR":
+        return WarmupCosineLR(
+            optimizer,
+            cfg.SOLVER.MAX_ITER,
+            warmup_factor=cfg.SOLVER.WARMUP_FACTOR,
+            warmup_iters=cfg.SOLVER.WARMUP_ITERS,
+            warmup_method=cfg.SOLVER.WARMUP_METHOD,
+        )
+    else:
+        raise ValueError("Unknown LR scheduler: {}".format(name))        
+
+
+
+#########################################################################################################################################################################
+
+3、WarmupMultiStepLR
+
+
+class WarmupMultiStepLR(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        milestones: List[int],
+        gamma: float = 0.1,
+        warmup_factor: float = 0.001,
+        warmup_iters: int = 1000,
+        warmup_method: str = "linear",
+        last_epoch: int = -1,
+    ):
+        if not list(milestones) == sorted(milestones):
+            raise ValueError(
+                "Milestones should be a list of" " increasing integers. Got {}", milestones
+            )
+        self.milestones = milestones
+        self.gamma = gamma
+        self.warmup_factor = warmup_factor
+        self.warmup_iters = warmup_iters
+        self.warmup_method = warmup_method
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self) -> List[float]:
+        warmup_factor = _get_warmup_factor_at_iter(
+            self.warmup_method, self.last_epoch, self.warmup_iters, self.warmup_factor
+        )
+        return [
+            base_lr * warmup_factor * self.gamma ** bisect_right(self.milestones, self.last_epoch)
+            for base_lr in self.base_lrs 
+##################################################
+## self.base_lrs 【0.001，.... 0.001】 len = 84
+#################################################
+        ]
+
+    def _compute_values(self) -> List[float]:
+        # The new interface
+        return self.get_lr()
+
+
+
+def _get_warmup_factor_at_iter(method: str, iter: int, warmup_iters: int, warmup_factor: float) -> float:
+    """
+    Return the learning rate warmup factor at a specific iteration.
+    See https://arxiv.org/abs/1706.02677 for more details.
+
+    Args:
+        method (str): warmup method; either "constant" or "linear".
+        iter (int): iteration at which to calculate the warmup factor.
+        warmup_iters (int): the number of warmup iterations.
+        warmup_factor (float): the base warmup factor (the meaning changes according
+            to the method used).
+
+    Returns:
+        float: the effective warmup factor at the given iteration.
+    """
+    if iter >= warmup_iters:
+        return 1.0
+
+    if method == "constant":
+        return warmup_factor
+    elif method == "linear":
+        alpha = iter / warmup_iters
+        return warmup_factor * (1 - alpha) + alpha
+    else:
+        raise ValueError("Unknown warmup method: {}".format(method))
+
+
+#########################################################################################################################################################################
+X.permuter(0,2,1)相当于将0，1，2按照角标的方式进行对换维度
+
+
+
+
+
+
+
+
+
+
 
 
 
