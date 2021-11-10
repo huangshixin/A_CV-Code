@@ -57,7 +57,8 @@ backend ='nccl' 使用GPU则选择nccl CPU则选择Gloo
 init_method = 'tcp://localhost:port' 输出TCP参数即可
 timeout 时间超时机制 超出多少时间 则直接停止(可以不填写）
 world_size 需要启动的进程数,一般设置为（GPU个数） args.world_size = args.gpus * args.nodes   4or8
-rank 当前进程的等级（它应该是一个 0 到 world_size-1). 如果需要 store被指定-------------这一参数的作用是为各个进程分配rank号，因此可以直接使用这个local_rank参数作为
+rank 当前进程的等级（它应该是一个 0 到 world_size-1). 如果需要 store被指定，的为主进程，即 master 节点。
+local_rank-------------这一参数的作用是为各个进程分配rank号，因此可以直接使用这个local_rank参数作为
 group_name ( str , optional , deprecated ) – 组名。
 pg_options ( ProcessGroupOptions , optional ) – 进程组选项 指定在此期间需要传入哪些附加选项 特定过程组的构建。
 截至目前，唯一 我们支持的选项是 ProcessGroupNCCL.Options为了 nccl 后端， is_high_priority_stream可以指定，
