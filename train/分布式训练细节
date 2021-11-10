@@ -1,9 +1,7 @@
 分布式训练的注意事项
-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-导入相应的包
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-import torch.distributed as dist
-import os,time
+------------------------------------------------------------------------------------导入相应的包-------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 '''
 As of PyTorch v1.8, Windows supports all collective communications backend but NCCL, If the init_method argument of init_process_group() points to a file it must adhere to the following schema:
@@ -14,3 +12,67 @@ As of PyTorch v1.8, Windows supports all collective communications backend but N
 
 Same as on Linux platform, you can enable TcpStore by setting environment variables, MASTER_ADDR and MASTER_PORT.
 '''
+
+#在使用GUP训练的时候直接选用NCCL，作为backend的参数值即可
+Use the NCCL backend for distributed GPU training
+
+Use the Gloo backend for distributed CPU training
+
+
+import os,time
+import argparse参数管理库
+import torch.multiprocessing as mp
+import torchvision
+import torchvision.transforms as transforms
+import torch
+import torch.nn as nn
+import torch.distributed as dist
+from apex.parallel import DistributedDataParallel as DDP
+from apex import amp
+
+#参数管理方式
+parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--nodes', default=1, type=int, metavar='N')
+    parser.add_argument('-g', '--gpus', default=1, type=int,
+                        help='number of gpus per node')
+    parser.add_argument('-nr', '--nr', default=0, type=int,
+                        help='ranking within the nodes')
+    parser.add_argument('--epochs', default=2, type=int, metavar='N',
+                        help='number of total epochs to run')
+    parser.add_argument('--local_rank', type=int, ...)
+    args = parser.parse_args()
+ args.world_size = args.gpus * args.nodes                #args.nodes是节点总数，而args.gpus是每个节点的GPU总数，（每个节点GPU数是一样的）
+ os.environ['MASTER_ADDR'] = '10.57.23.164'              #
+ os.environ['MASTER_PORT'] = '8888'                      #
+ mp.spawn(train, nprocs=args.gpus, args=(args,))   
+ 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#训练阶段事项
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+torch.distributed.is_available() 查看是否可以使用分布式训练（就是看有几张显卡）
+1、初始化分布式的参数 
+torch.distributed.init_process_group(backend, init_method='env://', timeout=datetime.timedelta(0, 1800), world_size=- 1, rank=- 1, store=None, group_name='', pg_options=None)
+'''
+backend ='nccl' 使用GPU则选择nccl CPU则选择Gloo
+init_method = 'tcp://localhost:port' 输出TCP参数即可
+timeout 时间超时机制 超出多少时间 则直接停止(可以不填写）
+world_size 需要启动的进程数,一般设置为（GPU个数） args.world_size = args.gpus * args.nodes   4or8
+rank 当前进程的等级（它应该是一个 0 到 world_size-1). 如果需要 store被指定-------------这一参数的作用是为各个进程分配rank号，因此可以直接使用这个local_rank参数作为
+group_name ( str , optional , deprecated ) – 组名。
+pg_options ( ProcessGroupOptions , optional ) – 进程组选项 指定在此期间需要传入哪些附加选项 特定过程组的构建。
+截至目前，唯一 我们支持的选项是 ProcessGroupNCCL.Options为了 nccl 后端， is_high_priority_stream可以指定，
+以便 nccl 后端可以在以下情况下获取高优先级 cuda 流 有计算内核在等待。 
+'''
+
+3种初始化方法：
+dist.init_process_group(backend, init_method='tcp://10.1.1.20:23456',
+                        rank=args.rank, world_size=4)
+dist.init_process_group(backend, init_method='file:///mnt/nfs/sharedfile',
+                        world_size=4, rank=args.rank)
+                        
+
+
+
+
+
+
