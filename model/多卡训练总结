@@ -29,10 +29,17 @@ BN如何在不同设备之间同步？
 注意：如果不用同步BN，而是每个设备计算自己的批次数据的均值方差，效果与单GPU一致，仅仅能提升训练速度；如果使用同步BN，效果会有一定提升，但是会损失一部分并行速度。
 
 
+
+
+#开始初始化分布式训练准备
 --------------------------------------------------------------------
 #下面以分类问题为基准，详细介绍使用DistributedDataParallel时的过程:
 首先要初始化各进程环境：
 --------------------------------------------------------------------
+
+
+1、在分布式训练之前需要调用初始化方法---具体步骤如下：
+
 def init_distributed_mode(args):
     # 如果是多机多卡的机器，WORLD_SIZE代表使用的机器数，RANK对应第几台机器
     # 如果是单机多卡的机器，WORLD_SIZE代表有几块GPU，RANK和LOCAL_RANK代表第几块GPU
@@ -48,31 +55,91 @@ def init_distributed_mode(args):
         print('Not using distributed mode')
         args.distributed = False
         return
-
+   
+    #这里的args里面是一个容器的函数
     args.distributed = True
 
     torch.cuda.set_device(args.gpu)  # 对当前进程指定使用的GPU
     args.dist_backend = 'nccl'# 通信后端，nvidia GPU推荐使用NCCL
     dist.barrier()  # 等待每个GPU都运行完这个地方以后再继续
 
+-------------------------------------------------------------------------------------------------------
+在main函数初始阶段，进行以下初始化操作。需要注意的是，学习率需要根据使用GPU的张数增加。在这里使用简单的倍增方法。
+-------------------------------------------------------------------------------------------------------、
+2、main函数中需要对学习率做一定的调整
+def main(args):
+	    if torch.cuda.is_available() isFalse:
+	        raise EnvironmentError("not find GPU device for training.")
+	
+	    # 初始化各进程环境
+	    init_distributed_mode(args=args)
+	
+	    rank = args.rank
+	    device = torch.device(args.device)
+	    batch_size = args.batch_size
+	    num_classes = args.num_classes
+	    weights_path = args.weights
+	    args.lr *= args.world_size  # 学习率要根据并行GPU的数倍增  （********************************************************************************************）
+
+
+
+-------------------------------------------------------------------------------------------------------
+实例化数据集可以使用单卡相同的方法，但在sample样本时，和单机不同，需要使用DistributedSampler和BatchSampler。
+-------------------------------------------------------------------------------------------------------
+3、数据集的加载可以类似于单机方式，但是对于数据集的采样则需要使用特殊的方法
+
+#给每个rank对应的进程分配训练的样本索引
+
+train_sampler=torch.utils.data.distributed.DistributedSampler(train_data_set)
+
+val_sampler=torch.utils.data.distributed.DistributedSampler(val_data_set)
+
+#将样本索引每batch_size个元素组成一个list
+train_batch_sampler=torch.utils.data.BatchSampler(train_sampler,batch_size,drop_last=True)
+
+DistributedSampler原理如图所示：假设当前数据集有0~10共11个样本，使用2块GPU计算。首先打乱数据顺序，然后用 11/2 =6（向上取整），然后6乘以GPU个数2 = 12，
+因为只有11个数据，所以再把第一个数据（索引为6的数据）补到末尾，现在就有12个数据可以均匀分到每块GPU。然后分配数据：间隔将数据分配到不同的GPU中。
+
+
+4、数据集的加载（传入数据集和采样的方法）
+train_loader = torch.utils.data.DataLoader(train_data_set,
+                                               batch_sampler=train_batch_sampler,
+                                               pin_memory=True,   # 直接加载到显存中，达到加速效果
+                                               num_workers=nw,
+                                               collate_fn=train_data_set.collate_fn)
+
+ val_loader = torch.utils.data.DataLoader(val_data_set,
+                                             batch_size=batch_size,
+                                             sampler=val_sampler,
+                                             pin_memory=True,
+                                             num_workers=nw,
+                                             collate_fn=val_data_set.collate_fn)
 
 
 
 
 
+5、如果有预训练权重的话，需要保证每块GPU加载的权重是一模一样的。需要在主进程保存模型初始化权重，在不同设备上载入主进程保存的权重。这样才能保证每块GOU上加载的权重是一致的：
 
+# 实例化模型
+    model = resnet34(num_classes=num_classes).to(device)
 
+    # 如果存在预训练权重则载入
+    if os.path.exists(weights_path):
+        weights_dict = torch.load(weights_path, map_location=device)
+        # 简单对比每层的权重参数个数是否一致
+        load_weights_dict = {k: v for k, v in weights_dict.items()
+                             if model.state_dict()[k].numel() == v.numel()}
+        model.load_state_dict(load_weights_dict, strict=False)
+    else:
+        checkpoint_path = os.path.join(tempfile.gettempdir(), "initial_weights.pt")
+        # 如果不存在预训练权重，需要将第一个进程中的权重保存，然后其他进程载入，保持初始化权重一致
+        if rank == 0:
+            torch.save(model.state_dict(), checkpoint_path)
 
-
-
-
-
-
-
-
-
-
-
+        dist.barrier()
+        # 这里注意，一定要指定map_location参数，否则会导致第一块GPU占用更多资源
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
 
 
 
