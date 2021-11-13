@@ -1,0 +1,32 @@
+#pip install ptflops
+1、第一种方法
+import torchvision
+from ptflops import get_model_complexity_info
+ 
+model = torchvision.models.alexnet(pretrained=False)
+flops, params = get_model_complexity_info(model, (3, 224, 224), as_strings=True, print_per_layer_stat=True)
+print('flops: ', flops, 'params: ', params)
+
+
+2、 一个功能强大的工具包torchstat。该工具包可通过pip直接安装：
+
+pip install torchstat
+
+
+安装完成后，使用torchstat进行模型分析的方法如下：
+
+from torchstat import stat
+
+stat(model, (3, 224, 224))
+
+
+
+3、thop
+from thop import profile
+from thop import clever_format
+
+input = torch.randn(1, 3, 224, 224)
+flops, params = profile(model, inputs=(input, ))
+print(flops, params) # 1819066368.0 11689512.0
+flops, params = clever_format([flops, params], "%.3f")
+print(flops, params) # 1.819G 11.690M
