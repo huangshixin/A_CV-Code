@@ -30,3 +30,5 @@ flops, params = profile(model, inputs=(input, ))
 print(flops, params) # 1819066368.0 11689512.0
 flops, params = clever_format([flops, params], "%.3f")
 print(flops, params) # 1.819G 11.690M
+print('flops: ', flops, 'params: ', params)
+print('flops: %.2f M, params: %.2f M' % (flops / 1000000.0, params / 1000000.0))  #字符串类型的字型 '%.2f '%(flops) 该值会匹配
