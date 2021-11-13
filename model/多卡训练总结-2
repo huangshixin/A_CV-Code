@@ -59,7 +59,7 @@ def init_distributed_mode(args):
     #这里的args里面是一个容器的函数
     args.distributed = True
 
-    torch.cuda.set_device(args.gpu)  # 对当前进程指定使用的GPU
+    torch.cuda.set_device(args.gpu)  # 对当前进程指定使用的GPU  一般不建议使用这个方式设置设备，大多数情况下，最好使用CUDA_VISIBLE_DEVICES环境变量。其中的参数device是设备，如果是负数，则为未设置
     args.dist_backend = 'nccl'# 通信后端，nvidia GPU推荐使用NCCL
     dist.barrier()  # 等待每个GPU都运行完这个地方以后再继续
 
@@ -118,9 +118,9 @@ train_loader = torch.utils.data.DataLoader(train_data_set,
 
 
 
-
-5、如果有预训练权重的话，需要保证每块GPU加载的权重是一模一样的。需要在主进程保存模型初始化权重，在不同设备上载入主进程保存的权重。这样才能保证每块GOU上加载的权重是一致的：
-
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+5、如果有预训练权重的话，需要保证每块GPU加载的权重是一模一样的。需要在主进程保存模型初始化权重，在不同设备上载入主进程保存的权重。这样才能保证每块GPU上加载的权重是一致的：
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 实例化模型
     model = resnet34(num_classes=num_classes).to(device)
 
@@ -140,15 +140,157 @@ train_loader = torch.utils.data.DataLoader(train_data_set,
         dist.barrier()
         # 这里注意，一定要指定map_location参数，否则会导致第一块GPU占用更多资源
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+	
+	
+	
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+如果需要冻结模型权重，和单GPU基本没有差别。如果不需要冻结权重，可以选择是否同步BN层。然后再把模型包装成DDP模型，就可以方便进程之间的通信了。多GPU和单GPU的优化器设置没有差别，这里不再赘述
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 是否冻结权重
+    if args.freeze_layers:
+        for name, para in model.named_parameters():
+            # 除最后的全连接层外，其他权重全部冻结
+            if"fc"notin name:
+                para.requires_grad_(False)
+    else:
+        # 只有训练带有BN结构的网络时使用SyncBatchNorm采用意义
+        if args.syncBN:
+            # 使用SyncBatchNorm后训练会更耗时
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
+	
+	# 转为DDP模型
+         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+
+	 # optimizer使用SGD+余弦淬火策略
+	    pg = [p for p in model.parameters() if p.requires_grad]
+	    optimizer = optim.SGD(pg, lr=args.lr, momentum=0.9, weight_decay=0.005)
+	    lf = lambda x: ((1 + math.cos(x * math.pi / args.epochs)) / 2) * (1 - args.lrf) + args.lrf  # cosine
+    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+  
+
+
+与单GPU不同的地方：rain_sampler.set_epoch(epoch)，这行代码会在每次迭代的时候获得一个不同的生成器，每一轮开始迭代获取数据之前设置随机种子，通过改变传进的epoch参数改变打乱数据顺序。通过设置不同的随机种子，可以让不同GPU每轮拿到的数据不同。后面的部分和单GPU相同。
+
+for epoch in range(args.epochs):
+	        train_sampler.set_epoch(epoch)  
+
+	        mean_loss = train_one_epoch(model=model,
+	                                    optimizer=optimizer,
+	                                    data_loader=train_loader,
+	                                    device=device,
+	                                    epoch=epoch)
+	
+	        scheduler.step()
+	
+	        sum_num = evaluate(model=model,
+	                           data_loader=val_loader,
+	                           device=device)
+	        acc = sum_num / val_sampler.total_size
 
 
 
 
 
 
+7、差异比较
+
+我们详细看看每个epoch是训练时和单GPU训练的差异（上面的train_one_epoch）
+
+
+def train_one_epoch(model, optimizer, data_loader, device, epoch):
+	    model.train()
+	    loss_function = torch.nn.CrossEntropyLoss()
+	    mean_loss = torch.zeros(1).to(device)
+	    optimizer.zero_grad()
+	
+	    # 在进程0中打印训练进度
+	    if is_main_process():
+	        data_loader = tqdm(data_loader)
+	
+	    for step, data in enumerate(data_loader):
+	        images, labels = data
+	
+	        pred = model(images.to(device))
+	
+	        loss = loss_function(pred, labels.to(device))
+	        loss.backward()
+	        loss = reduce_value(loss, average=True)  #  在单GPU中不起作用，多GPU时，获得所有GPU的loss的均值。
+	        mean_loss = (mean_loss * step + loss.detach()) / (step + 1)  # update mean losses
+	
+	        # 在进程0中打印平均loss
+	        if is_main_process():
+	            data_loader.desc = "[epoch {}] mean loss {}".format(epoch, round(mean_loss.item(), 3))
+	
+	        ifnot torch.isfinite(loss):
+	            print('WARNING: non-finite loss, ending training ', loss)
+	            sys.exit(1)
+	
+	        optimizer.step()
+	        optimizer.zero_grad()
+	
+	    # 等待所有进程计算完毕
+	    if device != torch.device("cpu"):
+	        torch.cuda.synchronize(device)
+	
+	    return mean_loss.item()
+	
+	def reduce_value(value, average=True):
+	    world_size = get_world_size()
+	    if world_size < 2:  # 单GPU的情况
+	        return value
+	
+	    with torch.no_grad():
+	        dist.all_reduce(value)   # 对不同设备之间的value求和
+	        if average:  # 如果需要求平均，获得多块GPU计算loss的均值
+	            value /= world_size
+	
+        return value
+
+	#接下来看一下验证阶段的情况，和单GPU最大的额不同之处是预测正确样本个数的地方。
+	@torch.no_grad()
+	def evaluate(model, data_loader, device):
+	    model.eval()
+	
+	    # 用于存储预测正确的样本个数，每块GPU都会计算自己正确样本的数量
+	    sum_num = torch.zeros(1).to(device)
+	
+	    # 在进程0中打印验证进度
+	    if is_main_process():
+	        data_loader = tqdm(data_loader)
+	
+	    for step, data in enumerate(data_loader):
+	        images, labels = data
+	        pred = model(images.to(device))
+	        pred = torch.max(pred, dim=1)[1]
+	        sum_num += torch.eq(pred, labels.to(device)).sum()
+	
+	    # 等待所有进程计算完毕
+	    if device != torch.device("cpu"):
+	        torch.cuda.synchronize(device)
+	
+	    sum_num = reduce_value(sum_num, average=False)  # 预测正确样本个数
+	
+    return sum_num.item()
+    
+    
+   
+ 8、保存模型
+ 需要注意的是：保存模型的权重需要在主进程中进行保存。
+ if rank == 0:
+            print("[epoch {}] accuracy: {}".format(epoch, round(acc, 3)))
+            tags = ["loss", "accuracy", "learning_rate"]
+            tb_writer.add_scalar(tags[0], mean_loss, epoch)
+            tb_writer.add_scalar(tags[1], acc, epoch)
+            tb_writer.add_scalar(tags[2], optimizer.param_groups[0]["lr"], epoch)
+
+            torch.save(model.module.state_dict(), "./weights/model-{}.pth".format(epoch))
 
 
 
+如果从头开始训练，主进程生成的初始化权重是以临时文件的形式保存，需要训练完后移除掉。最后还需要撤销进程组。
+
+if rank == 0:# 删除临时缓存文件        if os.path.exists(checkpoint_path) is True:            os.remove(checkpoint_path)    dist.destroy_process_group()  # 撤销进程组，释放资源
 
 
 
