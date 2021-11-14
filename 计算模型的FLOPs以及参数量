@@ -1,4 +1,5 @@
 博客链接 https://mp.weixin.qq.com/s/DyUatPlrpim265RhkDwlpw
+file:///D:/4_data/4_firefox/%E7%81%AB%E7%8B%90%E6%88%AA%E5%9B%BE_2021-11-14T08-58-18.392Z.png
 #pip install ptflops
 1、第一种方法
 import torchvision
