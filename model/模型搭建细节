@@ -4,27 +4,32 @@
 # Written by Ze Liu
 # --------------------------------------------------------
 
-import os
-import time
-import argparse
-import datetime
-import numpy as np
+import os #读取系统文件
+import time #计算系统中的时间 
+import argparse #容器库
+import datetime #设置时间戳
+import numpy as np #数学库
 
 import torch
-import torch.backends.cudnn as cudnn
-import torch.distributed as dist
+import torch.backends.cudnn as cudnn #nvidia加速
+import torch.distributed as dist #分布式训练
 
-from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
-from timm.utils import accuracy, AverageMeter
+from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy #timm库用于存放训练的模型 、损失、优化器等
+from timm.utils import accuracy, AverageMeter  #计算精度文章 以及平均精度库
 
-from config import get_config
-from models import build_model
-from data import build_loader
-from lr_scheduler import build_scheduler
-from optimizer import build_optimizer
-from logger import create_logger
-from utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor
+from config import get_config #配置文件
+from models import build_model #主模型函数 用于封装设定的主模型
+from data import build_loader #封装了数据增强 以及数据加载的方式
+from lr_scheduler import build_scheduler #调整学习率
+from optimizer import build_optimizer #建立优化器
+from logger import create_logger #创建日志文件
+from utils import load_checkpoint, save_checkpoint, get_grad_norm, auto_resume_helper, reduce_tensor #加载训练好的模型等
 
+
+
+#----
+#nvidia加速  ---自动混合求精度训练
+#---
 try:
     # noinspection PyUnresolvedReferences
     from apex import amp
@@ -32,6 +37,7 @@ except ImportError:
     amp = None
 
 
+#参数配置文件
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
     parser.add_argument('--cfg', type=str, required=False, metavar="FILE", help='path to config file',
@@ -44,7 +50,7 @@ def parse_option():
     )
 
     # easy config modification
-    parser.add_argument('--batch-size', type=int, help="batch size for single GPU",default=150)
+    parser.add_argument('--batch-size', type=int, help="batch size for single GPU",default=#)
     parser.add_argument('--data-path', type=str, help='path to dataset',default=r'/mnt/B012D7F812D7C210/dataset/imagenet_100')
     parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
     parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
@@ -60,7 +66,7 @@ def parse_option():
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
     parser.add_argument('--tag', help='tag of experiment')
-    parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
+    parser.add_argument('--eval', action='store_true', help='Perform evaluation only')  #action='store_true'  这个值为False
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     parser.add_argument('--dist-url', default='tcp://localhost:10001', type=str,
                         help='url used to set up distributed training')
@@ -80,15 +86,14 @@ def main(config):
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
     model = build_model(config)
-    print(model)
     model.cuda()
     logger.info(str(model))
 
     optimizer = build_optimizer(config, model)
     if config.AMP_OPT_LEVEL != "O0":
         model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
-    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
+   
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)#在进行分布式计算时需要对分布式组件进行初始化
     model_without_ddp = model.module
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
