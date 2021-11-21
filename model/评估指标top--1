@@ -1,0 +1,85 @@
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
+
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
+
+# evaluate
+     for epoch in range(start_epoch, args.epochs):
+        # train
+        if args.weights == 'finetune':
+            model.train()
+        elif args.weights == 'freeze':
+            model.eval()
+        else:
+            assert False
+        train_sampler.set_epoch(epoch)
+        for step, (images, target) in enumerate(train_loader, start=epoch * len(train_loader)):
+            output = model(images.cuda(gpu, non_blocking=True))
+            loss = criterion(output, target.cuda(gpu, non_blocking=True))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            if step % args.print_freq == 0:
+                torch.distributed.reduce(loss.div_(args.world_size), 0)
+                if args.rank == 0:
+                    pg = optimizer.param_groups
+                    lr_classifier = pg[0]['lr']
+                    lr_backbone = pg[1]['lr'] if len(pg) == 2 else 0
+                    stats = dict(epoch=epoch, step=step, lr_backbone=lr_backbone,
+                                 lr_classifier=lr_classifier, loss=loss.item(),
+                                 time=int(time.time() - start_time))
+                    print(json.dumps(stats))
+                    print(json.dumps(stats), file=stats_file)
+
+        # evaluate
+        model.eval()
+        if args.rank == 0:
+            top1 = AverageMeter('Acc@1')
+            top5 = AverageMeter('Acc@5')
+            with torch.no_grad():
+                for images, target in val_loader:
+                    output = model(images.cuda(gpu, non_blocking=True))
+                    acc1, acc5 = accuracy(output, target.cuda(gpu, non_blocking=True), topk=(1, 5))
+                    top1.update(acc1[0].item(), images.size(0))
+                    top5.update(acc5[0].item(), images.size(0))
+            best_acc.top1 = max(best_acc.top1, top1.avg)
+            best_acc.top5 = max(best_acc.top5, top5.avg)
+            stats = dict(epoch=epoch, acc1=top1.avg, acc5=top5.avg, best_acc1=best_acc.top1, best_acc5=best_acc.top5)
+            print(json.dumps(stats))
+            print(json.dumps(stats), file=stats_file)
