@@ -1,0 +1,54 @@
+config添加
+
+parser.add_argument('--local_rank', type=int, default=-1)
+
+train中添加
+
+import torch.distributed as dist
+from torch.utils.data.distributed import DistributedSampler
+
+在有写操作时，注意判断local_rank
+
+初始化
+
+dist.init_process_group(backend='nccl') 
+torch.cuda.set_device(self.opt.local_rank)
+torch.autograd.set_detect_anomaly(True) #检查异常使用,训练时需注释掉
+self.device = torch.device("cuda", self.opt.local_rank) if torch.cuda.is_available() else torch.device("cpu")
+
+模型操作（用到batchnorm需要额外添加一项，每个模型注意添加GPU idx）
+
+self.netD = torch.nn.SyncBatchNorm.convert_sync_batchnorm(self.netD)  #对多个批次进行标准化计算
+self.netD = torch.nn.parallel.DistributedDataParallel(self.netD,
+          find_unused_parameters=True,device_ids[self.opt.local_rank],output_device=self.opt.local_rank)
+
+dataloader操作（shuffle不能设置为True，因为sampler自带shuffle，testset可以不管）
+
+rain_dataset = self.dataset(
+            self.opt.data_path, train_filenames, self.opt.data_height, self.opt.data_width,
+            self.opt.data_frame_ids, 4, is_train=True, img_ext=img_ext)
+train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+self.train_loader = torch.utils.data.DataLoader(
+            train_dataset, self.opt.batch_size, #shuffle = True,
+            num_workers=self.opt.data_workers, pin_memory=True, drop_last=True, sampler=train_sampler)
+        
+
+训练
+
+export CUDA_VISIBLE_DEVICES=0,1
+python -m torch.distributed.launch --nproc_per_node=2 train_ablation_multi.py
+
+
+
+
+=====================================
+optimizer.zero_grad()#梯度清0
+total_loss.backward()#梯度反向传播
+optimizer_G.step()#梯度更新
+
+loss.backward()在前，然后跟一个step。
+
+那么为什么optimizer.step()需要放在每一个batch训练中，而不是epoch训练中，这是因为现在的mini-batch训练模式是假定每一个训练集就只有mini-batch这样大，因此实际上可以将每一次mini-batch看做是一次训练，一次训练更新一次参数空间，因而optimizer.step()放在这里。
+
+scheduler.step（）按照Pytorch的定义是用来更新优化器的学习率的，一般是按照epoch为单位进行更换，即多少个epoch后更换一次学习率，因而scheduler.step()放在epoch这个大循环下。
+
