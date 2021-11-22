@@ -66,6 +66,9 @@ def parse_option():
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
     parser.add_argument('--tag', help='tag of experiment')
+    
+    #------------------------------------------------------------------------------------------
+    #这里说明一下 action = 'store_true'  实际上是一个false
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')  #action='store_true'  这个值为False
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     parser.add_argument('--dist-url', default='tcp://localhost:10001', type=str,
@@ -130,9 +133,10 @@ def main(config):
         max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, logger)
         acc1, acc5, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+        #计算评估值这里return为空会返回一个none
         if config.EVAL_MODE:
             return
-
+    #计算吞吐量 但是啥也不返回  这里return为空会返回一个none
     if config.THROUGHPUT_MODE:
         throughput(data_loader_val, model, logger)
         return
