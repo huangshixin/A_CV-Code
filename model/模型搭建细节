@@ -68,7 +68,7 @@ def parse_option():
     parser.add_argument('--tag', help='tag of experiment')
     
     #------------------------------------------------------------------------------------------
-    #这里说明一下 action = 'store_true'  实际上是一个false
+    #这里说明一下 action = 'store_true'  实际上是一个false  ：可以改为store_false
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')  #action='store_true'  这个值为False
     parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     parser.add_argument('--dist-url', default='tcp://localhost:10001', type=str,
