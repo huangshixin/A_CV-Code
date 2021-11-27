@@ -86,6 +86,11 @@ def main(config):
         model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
     '''
+    torch.cuda.set_device(args.gpu)  # 对当前进程指定使用的GPU  一般不建议使用这个方式设置设备，大多数情况下，最好使用CUDA_VISIBLE_DEVICES环境变量。其中的参数device是设备，如果是负数，则为未设置
+    args.dist_backend = 'nccl'# 通信后端，nvidia GPU推荐使用NCCL
+    dist.barrier()  # 等待每个GPU都运行完这个地方以后再继续
+    '''
+    '''
     backend ='nccl' 使用GPU则选择nccl CPU则选择Gloo
     init_method = 'tcp://localhost:port' 输出TCP参数即可
     timeout 时间超时机制 超出多少时间 则直接停止(可以不填写）
@@ -152,6 +157,7 @@ def main(config):
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler)
         if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+            #在主进程中进行保存
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
 
         acc1, acc5, loss = validate(config, data_loader_val, model)
