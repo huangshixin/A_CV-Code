@@ -77,3 +77,15 @@ self.network=nn.Sequential(OrderedDict(
         ))
 
 
+
+
+
+
+【torchsummary】
+作用：用于计算神经网络的总的参数量
+from torchsummary import summary
+from torchvision.models import resnet18
+
+model = resnet18()
+summary(model, input_size=[(3, 256, 256)], batch_size=2, device="cpu")
+
