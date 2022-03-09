@@ -78,7 +78,8 @@ self.network=nn.Sequential(OrderedDict(
 
 
 
-
+爱因斯坦求和约定：
+https://www.aiuai.cn/aifarm1790.html
 
 
 【torchsummary】
